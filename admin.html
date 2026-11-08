@@ -155,6 +155,13 @@
   .person .name { font-weight: 600; }
   .person .meta { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--muted); font-size: 0.88rem; }
   .person .reason { grid-column: 1 / -1; color: var(--muted); font-size: 0.88rem; margin: 0; }
+  .who-cell { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .who-cell > div { min-width: 0; }
+  .who-cell .muted { overflow-wrap: anywhere; }
+  .avatar { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; flex: none; background: var(--raised); }
+  .avatar.initials { display: grid; place-items: center; font: 400 1.15rem/1 var(--serif); color: var(--text); }
+  .person .about { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 0.92rem; font-style: italic; overflow-wrap: anywhere; }
+  .more { display: flex; justify-content: center; margin-top: 18px; }
 
   /* Dialog */
   dialog { border: 0; padding: 0; background: var(--surface); color: var(--text); border-radius: 20px; width: min(460px, calc(100% - 32px)); box-shadow: 0 30px 60px -20px rgba(0,0,0,.45); }
@@ -698,31 +705,47 @@
     }
   }
 
+  const avatarUrl = (path) =>
+    path ? `${SUPABASE_URL}/storage/v1/object/public/avatars/${String(path).split("/").map(encodeURIComponent).join("/")}` : null;
+  const initialsOf = (name) =>
+    (name || "?").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
+
+  function avatar(p) {
+    const src = p.avatar_path ? safeImage(avatarUrl(p.avatar_path)) : null;
+    return src
+      ? el("img", { class: "avatar", src, alt: "", loading: "lazy" })
+      : el("span", { class: "avatar initials", "aria-hidden": "true" }, initialsOf(p.display_name || p.email));
+  }
+
   function personRow(p) {
     const st = standing(p.suspended_until);
     const name = p.display_name || p.email;
+    const plural = (n, word) => `${num(n)} ${word}${Number(n) === 1 ? "" : "s"}`;
     const row = el("div", { class: "person" },
-      el("div", {}, el("div", { class: "name" }, name), el("div", { class: "muted small" }, p.email)),
+      el("div", { class: "who-cell" }, avatar(p),
+        el("div", {}, el("div", { class: "name" }, name), el("div", { class: "muted small" }, p.email))),
       el("div", {}, p.is_admin ? el("span", { class: "pill neutral" }, "Admin") : el("span", { class: `pill ${st.tone}` }, st.label)),
+      p.about ? el("p", { class: "about" }, `“${p.about}”`) : null,
       el("div", { class: "meta" },
         el("span", {}, `Joined ${day(p.created_at)}`),
+        el("span", {}, p.email_confirmed ? "Email confirmed" : "Email not confirmed"),
         el("span", {}, `Last seen ${ago(p.last_seen_at)}`),
-        el("span", {}, `${num(p.messages_sent)} messages sent`),
-        el("span", {}, `${num(p.reports_against)} report${Number(p.reports_against) === 1 ? "" : "s"} against`),
-        p.email_confirmed ? null : el("span", {}, "Email not confirmed")),
+        el("span", {}, plural(p.chats, "chat")),
+        el("span", {}, `${plural(p.messages_sent, "message")} sent`),
+        el("span", {}, `${plural(p.reports_against, "report")} against`)),
       p.suspension_reason && st.tone !== "ok" ? el("p", { class: "reason" }, `Reason: ${p.suspension_reason}`) : null);
     if (!p.is_admin) {
       const actions = el("div", { class: "actions", style: "grid-column:1 / -1" });
       if (st.tone === "ok") {
         const sus = el("button", { class: "btn danger-outline", type: "button" }, "Suspend or ban");
-        sus.addEventListener("click", suspendFlow(sus, p.id, name, null, () => search(state.query)));
+        sus.addEventListener("click", suspendFlow(sus, p.id, name, null, () => loadPeople(true)));
         actions.append(sus);
       } else {
         const lift = el("button", { class: "btn secondary", type: "button" }, "Lift suspension");
         lift.addEventListener("click", async () => {
           const answer = await ask({ title: `Lift the suspension on ${name}?`, text: "They’ll be able to sign in and use Vynk again straight away.", confirm: "Lift suspension" });
           if (!answer) return;
-          if (await run(lift, () => api("unsuspend", { user_id: p.id }), `${name} can use Vynk again`)) search(state.query);
+          if (await run(lift, () => api("unsuspend", { user_id: p.id }), `${name} can use Vynk again`)) loadPeople(true);
         });
         actions.append(lift);
       }
@@ -731,35 +754,63 @@
     return row;
   }
 
-  let resultsBox;
-  async function search(q) {
-    state.query = q;
-    if (!resultsBox) return;
-    if (q.trim().length < 2) {
-      resultsBox.replaceChildren(el("p", { class: "empty" }, "Type at least two characters of an email address."));
-      return;
+  // Everyone who has signed up, newest first, 50 at a time.
+  const people = { query: "", page: 0, users: [], total: 0, hasMore: false, loading: false };
+  let listBox, countLine, moreBox;
+
+  function renderPeopleList() {
+    const q = people.query;
+    countLine.textContent = !people.total
+      ? (q ? `No one matches “${q}”.` : "No one has signed up yet.")
+      : q
+        ? `${num(people.total)} ${people.total === 1 ? "person matches" : "people match"} “${q}”.`
+        : `${num(people.total)} ${people.total === 1 ? "person has" : "people have"} signed up, newest first.`;
+    listBox.replaceChildren(...people.users.map(personRow));
+    if (people.hasMore) {
+      const more = el("button", { class: "btn secondary", type: "button" }, `Show more (${num(people.total - people.users.length)} more)`);
+      more.addEventListener("click", () => { people.page += 1; loadPeople(false); });
+      moreBox.replaceChildren(more);
+    } else {
+      moreBox.replaceChildren();
     }
-    resultsBox.replaceChildren(spinner());
+  }
+
+  async function loadPeople(reset) {
+    if (people.loading || !listBox) return;
+    people.loading = true;
+    if (reset) {
+      people.page = 0;
+      people.users = [];
+      listBox.replaceChildren(spinner());
+      moreBox.replaceChildren();
+    } else {
+      moreBox.replaceChildren(spinner());
+    }
     try {
-      const { users } = await api("search_users", { query: q });
-      resultsBox.replaceChildren(...(users.length ? users.map(personRow) : [el("p", { class: "empty" }, `No accounts match “${q}”.`)]));
+      const res = await api("list_users", { query: people.query, page: people.page });
+      people.users = people.users.concat(res.users || []);
+      if (res.total !== null && res.total !== undefined) people.total = res.total;
+      else if (reset) people.total = 0;
+      people.hasMore = !!res.hasMore;
+      renderPeopleList();
     } catch (e) {
-      resultsBox.replaceChildren(el("p", { class: "empty" }, e.message));
+      listBox.replaceChildren(el("p", { class: "empty" }, e.message));
+      moreBox.replaceChildren();
+    } finally {
+      people.loading = false;
     }
   }
 
   function renderPeople() {
-    const input = el("input", { class: "input", type: "search", placeholder: "Search by email", "aria-label": "Search by email", value: state.query, autocomplete: "off", autocapitalize: "none", spellcheck: "false" });
-    const form = el("form", { class: "search", role: "search" }, input, el("button", { class: "btn primary", type: "submit" }, "Search"));
-    resultsBox = el("div", {});
-    form.addEventListener("submit", (e) => { e.preventDefault(); search(input.value); });
-    app.replaceChildren(el("div", { class: "wrap" },
-      el("h1", { class: "section-title" }, "People"),
-      el("p", { class: "muted", style: "margin:-8px 0 18px" }, "Find any account by part of its email address."),
-      form, resultsBox));
-    if (state.query) search(state.query);
-    else resultsBox.replaceChildren(el("p", { class: "empty" }, "Results appear here."));
-    input.focus();
+    const input = el("input", { class: "input", type: "search", placeholder: "Filter by name or email", "aria-label": "Filter by name or email", value: people.query, autocomplete: "off", autocapitalize: "none", spellcheck: "false" });
+    const form = el("form", { class: "search", role: "search" }, input, el("button", { class: "btn primary", type: "submit" }, "Filter"));
+    countLine = el("p", { class: "muted", style: "margin:-8px 0 18px" }, "");
+    listBox = el("div", { class: "people-list" });
+    moreBox = el("div", { class: "more" });
+    form.addEventListener("submit", (e) => { e.preventDefault(); people.query = input.value.trim(); loadPeople(true); });
+    input.addEventListener("search", () => { if (!input.value && people.query) { people.query = ""; loadPeople(true); } });
+    app.replaceChildren(el("div", { class: "wrap" }, el("h1", { class: "section-title" }, "People"), countLine, form, listBox, moreBox));
+    loadPeople(true);
   }
 
   document.querySelectorAll(".tab").forEach((b) => b.addEventListener("click", () => selectTab(b.dataset.tab)));
