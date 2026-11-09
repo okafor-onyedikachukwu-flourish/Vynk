@@ -162,6 +162,13 @@
   .avatar.initials { display: grid; place-items: center; font: 400 1.15rem/1 var(--serif); color: var(--text); }
   .person .about { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 0.92rem; font-style: italic; overflow-wrap: anywhere; }
   .more { display: flex; justify-content: center; margin-top: 18px; }
+  .versions { margin-top: 44px; }
+  .version { padding: 20px 0 6px; border-top: 1px solid var(--line); display: grid; gap: 14px; }
+  .version h3 { margin: 0; font-size: 1.05rem; font-weight: 600; }
+  .version-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .field { display: grid; gap: 6px; font-size: 0.92rem; }
+  .field small { font-size: 0.8rem; }
+  @media (max-width: 520px) { .version-grid { grid-template-columns: 1fr; } }
 
   /* Dialog */
   dialog { border: 0; padding: 0; background: var(--surface); color: var(--text); border-radius: 20px; width: min(460px, calc(100% - 32px)); box-shadow: 0 30px 60px -20px rgba(0,0,0,.45); }
@@ -553,6 +560,10 @@
       case "user_suspended": return `Suspended ${t}${a.details && a.details.days ? ` for ${a.details.days} day${a.details.days === 1 ? "" : "s"}` : ""}`;
       case "user_banned": return `Banned ${t}`;
       case "user_unsuspended": return `Lifted the suspension on ${t}`;
+      case "app_version_updated": {
+        const d = a.details || {};
+        return `Updated the ${d.platform === "ios" ? "iPhone" : "Android"} app version (latest ${d.latest_build}, minimum ${d.min_build})`;
+      }
       default: return a.action;
     }
   }
@@ -589,7 +600,61 @@
           data.recent.length
             ? el("ul", { class: "feed" }, data.recent.map((a) => el("li", {},
                 el("span", {}, describe(a)), el("time", { datetime: a.created_at }, ago(a.created_at)))))
-            : el("p", { class: "empty" }, "Actions you take on reports and accounts will be listed here.")))));
+            : el("p", { class: "empty" }, "Actions you take on reports and accounts will be listed here."))),
+      versionsSection()));
+  }
+
+  // ---------- App versions: update notices and required updates ----------
+  const field = (text, input, hint) => el("label", { class: "field" }, el("span", {}, text), input, hint ? el("small", { class: "muted" }, hint) : null);
+
+  function versionForm(v) {
+    const latest = el("input", { class: "input", type: "number", min: "1", step: "1", inputmode: "numeric", value: String(v.latest_build) });
+    const min = el("input", { class: "input", type: "number", min: "1", step: "1", inputmode: "numeric", value: String(v.min_build) });
+    const url = el("input", { class: "input", type: "url", placeholder: "https://…", value: v.download_url || "", autocapitalize: "none", spellcheck: "false" });
+    const notes = el("input", { class: "input", type: "text", maxlength: "200", placeholder: "Optional, e.g. Replies and light mode are here", value: v.notes || "" });
+    const save = el("button", { class: "btn primary", type: "submit" }, "Save");
+    const form = el("form", { class: "version" },
+      el("h3", {}, v.platform === "android" ? "Android" : "iPhone"),
+      el("div", { class: "version-grid" },
+        field("Latest build", latest, "People below this see an update notice."),
+        field("Minimum build", min, "People below this must update first.")),
+      field("Download link", url),
+      field("What’s new", notes),
+      el("div", { class: "actions" }, save));
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const l = Number(latest.value), m = Number(min.value);
+      if (!Number.isInteger(l) || !Number.isInteger(m) || l < 1 || m < 1) return toast("Build numbers must be whole numbers of 1 or more.");
+      if (m > l) return toast("The minimum build can’t be higher than the latest build.");
+      if (m > v.min_build) {
+        const ok = await ask({
+          title: "Require an update?",
+          text: `Everyone on a build below ${m} will see a “Time to update” screen and can’t use Vynk until they update. Their account and chats stay safe.`,
+          confirm: "Require update",
+          danger: true,
+        });
+        if (!ok) return;
+      }
+      if (await run(save, () => api("set_version", { platform: v.platform, latest_build: l, min_build: m, download_url: url.value, notes: notes.value }), "Saved")) {
+        v.min_build = m; v.latest_build = l;
+      }
+    });
+    return form;
+  }
+
+  function versionsSection() {
+    const box = el("section", { class: "versions" },
+      el("h2", { class: "section-title" }, "App versions"),
+      el("p", { class: "muted", style: "margin:-6px 0 6px" },
+        "After releasing a new build, raise “Latest build” so people get a gentle update notice. Raise “Minimum build” only when older versions would stop working properly. Each phone shows its build number at the bottom of Settings."),
+      spinner());
+    api("versions")
+      .then(({ versions }) => {
+        box.lastChild.remove();
+        (versions || []).forEach((v) => box.append(versionForm(v)));
+      })
+      .catch((e) => box.lastChild.replaceWith(el("p", { class: "empty" }, e.message)));
+    return box;
   }
 
   function messageBlock(r) {
