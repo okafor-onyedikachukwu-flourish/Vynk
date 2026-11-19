@@ -618,7 +618,7 @@
       el("div", { class: "version-grid" },
         field("Latest build", latest, "People below this see an update notice."),
         field("Minimum build", min, "People below this must update first.")),
-      field("Download link", url),
+      field("Download link", url, v.platform === "android" ? "Also used by the Download for Android button on the website." : ""),
       field("What’s new", notes),
       el("div", { class: "actions" }, save));
     form.addEventListener("submit", async (e) => {

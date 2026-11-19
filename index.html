@@ -79,8 +79,12 @@
   .store svg { width: 24px; height: 24px; flex: none; }
   .store small { display: block; font-size: 0.72rem; opacity: 0.75; line-height: 1.2; }
   .store strong { display: block; font-weight: 600; font-size: 1.05rem; line-height: 1.25; }
-  .store[aria-disabled="true"] { cursor: default; }
+  .store[aria-disabled="true"] { cursor: default; opacity: 0.6; }
   .store[aria-disabled="true"]:hover { transform: none; }
+  .install { margin-top: 18px; max-width: 34rem; font-size: 0.95rem; }
+  .install summary { cursor: pointer; font-weight: 600; width: fit-content; }
+  .install ol { margin: 10px 0 6px; padding-left: 1.3rem; display: grid; gap: 6px; }
+  .install p { margin: 0; opacity: 0.8; }
   .note { margin-top: 14px; font-size: 0.9rem; color: var(--muted); }
 
   /* Phone with a live conversation */
@@ -223,11 +227,20 @@
             <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.4 12.6c0-2.4 2-3.6 2.1-3.7-1.1-1.7-2.9-1.9-3.5-1.9-1.5-.2-2.9.9-3.7.9-.8 0-1.9-.9-3.2-.8-1.6 0-3.1 1-4 2.4-1.7 3-.4 7.4 1.2 9.8.8 1.2 1.8 2.5 3 2.4 1.2 0 1.7-.8 3.1-.8 1.5 0 1.9.8 3.2.8 1.3 0 2.2-1.2 3-2.4.9-1.4 1.3-2.7 1.3-2.8 0 0-2.5-1-2.5-3.9zM14 5.5c.7-.8 1.1-1.9 1-3-1 0-2.1.7-2.8 1.5-.6.7-1.2 1.8-1 2.9 1 .1 2.1-.6 2.8-1.4z"/></svg>
             <span><small class="state">Coming soon on the</small><strong>App Store</strong></span>
           </a>
-          <a class="store" data-store="android" href="#">
-            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3.6 2.3c-.2.2-.3.6-.3 1v17.4c0 .4.1.8.3 1L13.3 12 3.6 2.3zm10.7 10.7 2.6 2.6-11.2 6.4 8.6-9zm3.7-3.7 2.6 1.5c.8.5.8 1.8 0 2.3l-2.6 1.5-2.8-2.7 2.8-2.6zM5.7 2l11.2 6.4-2.6 2.6L5.7 2z"/></svg>
-            <span><small class="state">Coming soon on</small><strong>Google Play</strong></span>
+          <a class="store" data-store="android" href="#" aria-disabled="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+            <span><small class="state">Coming soon for</small><strong>Android</strong></span>
           </a>
         </div>
+        <details class="install" id="install-help" hidden>
+          <summary>How to install on Android</summary>
+          <ol>
+            <li>Tap <strong>Download for Android</strong>, then tap <strong>Install</strong> on the page that opens.</li>
+            <li>Open the downloaded file. If Android asks, tap <strong>Settings</strong> and switch on <strong>Allow from this source</strong>, then go back and tap <strong>Install</strong>.</li>
+            <li>If Play Protect shows a warning, tap <strong>More details</strong> and then <strong>Install anyway</strong>. This appears because Vynk isn’t on Google Play yet.</li>
+          </ol>
+          <p>After that, Vynk keeps itself up to date.</p>
+        </details>
         <p class="note">Sign-up takes a minute: just an email address and a password.</p>
       </div>
 
@@ -356,19 +369,54 @@
   </footer>
 
 <script>
-  // Add your store links here once the apps are live.
-  var STORE_LINKS = { ios: "", android: "" };
+  // The iPhone link goes here once Vynk is on the App Store.
+  var IOS_URL = "";
 
+  function disable(a) {
+    a.setAttribute("aria-disabled", "true");
+    a.removeAttribute("target");
+    a.href = "#";
+  }
   document.querySelectorAll(".store").forEach(function (a) {
-    var url = STORE_LINKS[a.dataset.store];
-    if (url) {
-      a.href = url;
-      a.querySelector(".state").textContent = a.dataset.store === "ios" ? "Download on the" : "Get it on";
-    } else {
-      a.setAttribute("aria-disabled", "true");
-      a.addEventListener("click", function (e) { e.preventDefault(); });
-    }
+    a.addEventListener("click", function (e) {
+      if (a.getAttribute("aria-disabled") === "true") e.preventDefault();
+    });
   });
+
+  var ios = document.querySelector('.store[data-store="ios"]');
+  if (IOS_URL) {
+    ios.href = IOS_URL;
+    ios.removeAttribute("aria-disabled");
+    ios.querySelector(".state").textContent = "Download on the";
+  } else {
+    disable(ios);
+  }
+
+  // Android: the download link set in the admin console (Overview -> App versions -> Android),
+  // so releasing a new build only means updating that one link.
+  (function () {
+    var android = document.querySelector('.store[data-store="android"]');
+    disable(android);
+    var site = location.origin;
+    fetch("https://gusmtidogzrzckltfzuv.supabase.co/rest/v1/app_versions?platform=eq.android&select=download_url", {
+      headers: { apikey: "sb_publishable_uqpIAMlVsdk7OgG-0u8QVA_gGUJjwIb" },
+    })
+      .then(function (r) { return r.ok ? r.json() : []; })
+      .then(function (rows) {
+        var url = rows && rows[0] && rows[0].download_url;
+        var link;
+        try { link = new URL(url); } catch (e) { return; }
+        // Only a real download page counts (https, and not just this website).
+        if (link.protocol !== "https:" || link.origin === site) return;
+        android.href = link.href;
+        android.target = "_blank";
+        android.rel = "noopener";
+        android.removeAttribute("aria-disabled");
+        android.querySelector(".state").textContent = "Download for";
+        document.getElementById("install-help").hidden = false;
+      })
+      .catch(function () {});
+  })();
   document.getElementById("year").textContent = new Date().getFullYear();
 
   // Hero sequence: read ticks turn brass, then Amara types and replies.
